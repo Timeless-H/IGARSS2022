@@ -1,0 +1,9 @@
+2022-11-21 17:25:07,066 - INFO - Dataset name: toronto_3d
+2022-11-21 17:25:07,066 - INFO - Name of model implemented: backbone_with_res
+2022-11-21 17:25:07,067 - INFO - Dropout rate: 0.500000
+2022-11-21 17:25:08,745 - INFO - Parameters: 5'970'260
+2022-11-21 17:25:12,339 - INFO - [*]Memory 7568MiB max, 7374MiB current
+2022-11-21 17:25:16,093 - INFO - [*]Memory 7578MiB max, 7381MiB current
+2022-11-21 17:25:19,830 - INFO - [*]Memory 7578MiB max, 7382MiB current
+2022-11-21 17:25:23,565 - INFO - [*]Memory 7582MiB max, 7386MiB current
+2022-11-21 17:25:27,284 - INFO - [*]Memory 7582MiB max, 7385MiB current

@@ -7,24 +7,28 @@ import numpy as np
 import h5py
 import pandas as pd
 import plyfile
-import Config
+from Config import Hparams as Config
 
 
-def recognize_all_data(rtdir, split=None):
-    tr_files = getDataFiles(os.path.join(rtdir, 'train_data_files.txt'), rtdir)
-    data_batch_list = []
-    label_batch_list = []
-    for h5_filename in tr_files:
-        temp = h5_filename.split('/', 2)[-1]
-        data_batch, label_batch = loadDataFile(os.path.join(rtdir, temp))
-        data_batch_list.append(data_batch)
-        label_batch_list.append(label_batch)
-    train_data = np.concatenate(data_batch_list, axis=0)
-    train_label = np.concatenate(label_batch_list, axis=0)
-    print('train_data:', train_data.shape, 'train_label:', train_label.shape)
+def recognize_all_data(rtdir, eval=False, split=None):
+    if not eval:
+        tr_files = getDataFiles(os.path.join(rtdir, 'train_data_files.txt'), rtdir)
+        data_batch_list = []
+        label_batch_list = []
+        for h5_filename in tr_files:
+            temp = h5_filename.split('/', 2)[-1]
+            data_batch, label_batch = loadDataFile(os.path.join(rtdir, temp))
+            data_batch_list.append(data_batch)
+            label_batch_list.append(label_batch)
+        train_data = np.concatenate(data_batch_list, axis=0)
+        train_label = np.concatenate(label_batch_list, axis=0)
+        print('train_data:', train_data.shape, 'train_label:', train_label.shape)
+    else:
+        train_data, train_label = [], []
 
-    if split == 'test':
-        test_files = getDataFiles(os.path.join(rtdir, 'test_files.txt'), rtdir, split='test')
+    if split == 'test' or split == 'val':
+        print('split under process: {}'.format(split))
+        test_files = getDataFiles(f"{rtdir}/{split}_data_files.txt", split=split)
         data_batch_list = []
         label_batch_list = []
         for h5_filename in test_files:
@@ -34,28 +38,19 @@ def recognize_all_data(rtdir, split=None):
             label_batch_list.append(label_batch)
         test_data = np.concatenate(data_batch_list, axis=0)
         test_label = np.concatenate(label_batch_list, axis=0)
-        print('test_data:', test_data.shape, 'test_label:', test_label.shape)
+        print('test_data:', test_data.shape, 'test_label:', test_label.shape, np.unique(test_label))
     else:
-        val_files = getDataFiles(os.path.join(rtdir, 'val_files.txt'), rtdir, split='val')
-        data_batch_list = []
-        label_batch_list = []
-        for h5_filename in val_files:
-            temp = h5_filename.split('/', 1)[-1]
-            data_batch, label_batch = loadDataFile(os.path.join(rtdir, temp))
-            data_batch_list.append(data_batch)
-            label_batch_list.append(label_batch)
-        test_data = np.concatenate(data_batch_list, axis=0)
-        test_label = np.concatenate(label_batch_list, axis=0)
-        print('val_data:', test_data.shape, 'val_label:', test_label.shape)
-        # test_data, test_label = [], []
+        test_data, test_label = [], []
     return train_data, train_label, test_data, test_label
 
 
-def getDataFiles(list_filename, rtdir, split=None):
+def getDataFiles(list_filename, split=None):
     if split == 'test' or split == 'val':
         level1_filelist = [line.rstrip() for line in open(list_filename)]
+        level1_filelist = [file for file in level1_filelist if file.split('_', 3)[1] == 'zero']
     else:
         level0 = [line.rstrip() for line in open(list_filename)]
+        rtdir = list_filename.rsplit('/', 1)[0]
         level1_filelist = []
         for path in level0:
             thepath = os.path.join(rtdir, (path.lstrip('.')).lstrip('/'))
@@ -63,7 +58,7 @@ def getDataFiles(list_filename, rtdir, split=None):
             # if [True for level1_file in level1_filelist if level1_temp == level1_file]:
             #     continue
             level1_filelist.extend(level1_temp)
-        level1_filelist = [file for file in level1_filelist if file.split('_', 3)[1] == 'zero']
+        # level1_filelist = [file for file in level1_filelist if file.split('_', 3)[1] == 'zero']
     return level1_filelist
 
 

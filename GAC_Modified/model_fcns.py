@@ -189,7 +189,7 @@ def struct_aware_sampler(xyz, npoint, radius=0.04, mode='du_ud_full'):
     return centroids
 
 
-def query_ball_point(radius, xyz, new_xyz):
+def query_ball_point(radius, xyz, new_xyz, nscale):
     """
     Input:
         radius: local region radius
@@ -212,7 +212,7 @@ def query_ball_point(radius, xyz, new_xyz):
     sqrdists = sqrdists.to(device)
 
     group_idx[sqrdists > radius ** 2] = N
-    if Config.nscales == 2:
+    if nscale == 2:
         group_idx0 = group_idx.sort(dim=-1)[0][:, :, :Config.multi_nsamples[0]]
         group_idx1 = group_idx.sort(dim=-1)[0][:, :, :Config.multi_nsamples[1]]
     else:
@@ -221,7 +221,7 @@ def query_ball_point(radius, xyz, new_xyz):
     device = "cuda:0"
     torch.device(device)
     
-    if Config.nscales == 2:
+    if nscale == 2:
         group_idx0 = group_idx0.to(device)
         group_first0 = group_idx0[:, :, 0].view(B, S, 1).repeat([1, 1, Config.multi_nsamples[0]])
         mask = group_idx0 == N
@@ -242,7 +242,7 @@ def query_ball_point(radius, xyz, new_xyz):
     return group_idx0, group_idx1
 
 
-def sample_and_group(sampler, npoint, radius, xyz, points, returnfps=False):
+def sample_and_group(sampler, npoint, nscale, radius, xyz, points, returnfps=False):
     """
     Input:
         sampler: 'sas', 'fps'
@@ -263,9 +263,9 @@ def sample_and_group(sampler, npoint, radius, xyz, points, returnfps=False):
     else:
         sas_idx = struct_aware_sampler(xyz, npoint, radius=1.6)
         new_xyz = index_points(xyz, sas_idx)  # sampled xyz based on fps_idx
-    idx0, idx1 = query_ball_point(radius, xyz, new_xyz)
+    idx0, idx1 = query_ball_point(radius, xyz, new_xyz, nscale)
 
-    if Config.nscales == 2:
+    if nscale == 2:
         grouped_xyz0 = index_points(xyz, idx0)  # [B, npoint, nsample, C]
         grouped_xyz1 = index_points(xyz, idx1)  # [B, npoint, nsample, C]
         grouped_xyz_norm0 = grouped_xyz0 - new_xyz.view(B, S, 1, C)
@@ -291,6 +291,7 @@ def sample_and_group(sampler, npoint, radius, xyz, points, returnfps=False):
     else:
         grouped_xyz0 = index_points(xyz, idx0)  # [B, npoint, nsample, C]
         grouped_xyz_norm0 = grouped_xyz0 - new_xyz.view(B, S, 1, C)
+        grouped_xyz1 = None
 
         if points is not None:
             grouped_points0 = index_points(points, idx0)
@@ -300,6 +301,7 @@ def sample_and_group(sampler, npoint, radius, xyz, points, returnfps=False):
                 sampled_points = index_points(points, sas_idx)
             sampled_points = torch.cat([new_xyz, sampled_points], dim=-1)
             new_points0 = torch.cat([grouped_xyz_norm0, grouped_points0], dim=-1)  # [B, npoint, nsample, C+D]
+            new_points1 = None
         else:
             new_points0 = grouped_xyz_norm0
             new_points1 = None
@@ -330,7 +332,7 @@ def sample_and_group_all(xyz, points):
     return new_xyz, new_points
 
 
-def max_dilation(xyz, points, layer, nscales, sampler='fps'):
+def max_dilation(xyz, points, layer, sampler='fps'):
     """determine the max nbrhood"""
     """
     Input:
@@ -354,6 +356,7 @@ def max_dilation(xyz, points, layer, nscales, sampler='fps'):
     #     max_nsamples = Config.single_nsample
     new_xyz, new_points0, new_points1, grouped_xyz0, grouped_xyz1, fps_points = sample_and_group(sampler,
                                                                                     Config.npoint[layer],
+                                                                                    Config.nscales[layer],
                                                                                     Config.max_radius[layer], 
                                                                                     xyz, points, True)
     return new_xyz, new_points0, new_points1, grouped_xyz0, grouped_xyz1, fps_points
@@ -424,18 +427,18 @@ class GATLayer(nn.Module):
 
 
 class GACLayer(nn.Module):
-    def __init__(self, npoint, radius, nsample, in_channel, mlp, group_all=False, dropout=0.5, alpha=0.2):
+    def __init__(self, npoint, radius, nscale, in_channel, mlp, group_all=False, dropout=0.5, alpha=0.2):
         super(GACLayer, self).__init__()
         self.npoint = npoint
         self.radius = radius
-        self.nsample = nsample
+        self.nscale = nscale
         self.mlp_convs = nn.ModuleList()
         self.mlp_bns = nn.ModuleList()
         self.dropout = dropout
         self.alpha = alpha
         self.residual = None
 
-        if Config.nscales > 1:
+        if nscale > 1:
             self.mlp_convs1 = nn.ModuleList()
             self.mlp_bns1 = nn.ModuleList()
             last_channel = in_channel  # the first last_channel == in_channel == 3 + 4 (pos + rgb,i)
@@ -445,15 +448,15 @@ class GACLayer(nn.Module):
                 self.mlp_convs1.append(nn.Conv2d(last_channel, out_channel, 1))
                 self.mlp_bns1.append(nn.BatchNorm2d(out_channel, track_running_stats=False))
                 last_channel = out_channel
-            self.GAT = GATLayer(3+last_channel,last_channel,self.dropout,self.alpha)
-            self.GAT1 = GATLayer(3+last_channel,last_channel,self.dropout,self.alpha)
+            self.GAT = AttentionMix(10+last_channel,last_channel,self.dropout,self.alpha)
+            self.GAT1 = AttentionMix(10+last_channel,last_channel,self.dropout,self.alpha)
         else:
             last_channel = in_channel  # the first last_channel == in_channel == 3 + 4 (pos + rgb,i)
             for out_channel in mlp:  # [32, 32, 64]
                 self.mlp_convs.append(nn.Conv2d(last_channel, out_channel, 1))
                 self.mlp_bns.append(nn.BatchNorm2d(out_channel, track_running_stats=False))
                 last_channel = out_channel
-            self.GAT = GATLayer(3+last_channel,last_channel,self.dropout,self.alpha)
+            self.GAT = AttentionMix(10+last_channel,last_channel,self.dropout,self.alpha)
 
         self.group_all = group_all
         
@@ -474,44 +477,47 @@ class GACLayer(nn.Module):
         if self.group_all:
             new_xyz, new_points = sample_and_group_all(xyz, points)
         else:
-            new_xyz, new_points0, new_points1, grouped_xyz0, grouped_xyz1, fps_points = sample_and_group('fps', self.npoint, self.radius, xyz, points, True)
+            new_xyz, new_points0, new_points1, grouped_xyz0, grouped_xyz1, fps_points = sample_and_group('fps', self.npoint, self.nscale, self.radius, xyz, points, True)
         # db = {'a':new_xyz, 'b':new_points, 'c':grouped_xyz, 'd':fps_points}
         # torch.save(db, 's_n_g_output')
         # new_xyz: sampled (centre) points position (xyz) data, [B, npoint, C]
         # new_points: sampled points data (grouped), [B, npoint, nsample, C+D]
         # fps_points: [B, npoint, C+D,1]
         new_points0 = new_points0.permute(0, 3, 2, 1)  # [B, C+D, nsample, npoint]
-        new_points1 = new_points1.permute(0, 3, 2, 1)  # [B, C+D, nsample, npoint]
-        fps_points = fps_points.unsqueeze(3).permute(0, 2, 3, 1)  # [B, C+D, 1, npoint]
-        self.residual = copy.deepcopy(fps_points)
-        if Config.nscales > 1:
+        if new_points1 is not None:
+            new_points1 = new_points1.permute(0, 3, 2, 1)  # [B, C+D, nsample, npoint]
+        fps_points0 = fps_points.unsqueeze(3).permute(0, 2, 3, 1)  # [B, C+D, 1, npoint]
+        self.residual = fps_points0.clone()
+        fps_points1 = fps_points0.clone()
+        if self.nscale == 2:
             for i, conv in enumerate(self.mlp_convs):
                 bn = self.mlp_bns[i]
-                fps_points = F.relu(bn(conv(fps_points)))
+                fps_points0 = F.relu(bn(conv(fps_points0)))
                 new_points0 = F.relu(bn(conv(new_points0)))   
             for i, conv in enumerate(self.mlp_convs1):
                 bn = self.mlp_bns1[i]
-                fps_points = F.relu(bn(conv(fps_points)))
+                fps_points1 = F.relu(bn(conv(fps_points1)))
                 new_points1 = F.relu(bn(conv(new_points1)))  
-
+            
             new_points0 = self.GAT(center_xyz=new_xyz,
-                                center_feature=fps_points.squeeze().permute(0,2,1),
+                                center_feature=fps_points0.squeeze().permute(0,2,1),
                                 grouped_xyz=grouped_xyz0, 
                                 grouped_feature=new_points0.permute(0,3,2,1))
             new_points1 = self.GAT1(center_xyz=new_xyz,
-                                center_feature=fps_points.squeeze().permute(0,2,1),
+                                center_feature=fps_points1.squeeze().permute(0,2,1),
                                 grouped_xyz=grouped_xyz1, 
                                 grouped_feature=new_points1.permute(0,3,2,1))  
-            #TODO: newpoints0 = find the mean of newpoints 0 and 1                    
+
+            new_points0 = (new_points0 + new_points1)/2 #TODO: newpoints0 = find the mean of newpoints 0 and 1                    
         else:
             for i, conv in enumerate(self.mlp_convs):
                 bn = self.mlp_bns[i]
-                fps_points = F.relu(bn(conv(fps_points)))
+                fps_points0 = F.relu(bn(conv(fps_points0)))
                 new_points0 = F.relu(bn(conv(new_points0)))
             # new_points: [B, F, nsample,npoint]
             # fps_points: [B, F, 1,npoint]
             new_points0 = self.GAT(center_xyz=new_xyz,
-                                center_feature=fps_points.squeeze().permute(0,2,1),
+                                center_feature=fps_points0.squeeze().permute(0,2,1),
                                 grouped_xyz=grouped_xyz0, 
                                 grouped_feature=new_points0.permute(0,3,2,1))
 
@@ -781,12 +787,12 @@ class GACLayer_NoSampling(nn.Module):
 
 class Res_Block(nn.Module):
     # adding residual to the GC layer
-    def __init__(self, layer, mode, nscales, npoint, radius, nsample, in_channel,
+    def __init__(self, layer, mode, npoint, radius, nscale, in_channel,
                  out_channel, mlp, bn, act_fxn, att, pna_agg):
         super(Res_Block, self).__init__()
         self.mode = mode
         if self.mode == 'gc':
-            self.body = GACLayer(npoint, radius, nsample, in_channel, mlp)
+            self.body = GACLayer(npoint, radius, nscale, in_channel, mlp)
             self.mlp = SharedMLP(in_channel, out_channel, bn, act_fxn)  # for bringing fps_points up to hidden dim
         elif self.mode == 'gc_no_s':
             self.body = GACLayer_NoSampling(layer, in_channel, mlp, att, pna_agg)
@@ -795,7 +801,7 @@ class Res_Block(nn.Module):
         if self.mode == 'gc':
             l_xyz, l_points = self.body(xyz, points)
         elif self.mode == 'gc_no_s':
-            new_xyz, new_points, grouped_xyz, fps_points = max_dilation(xyz, points, layer=self.body.layer, nscales=self.body.nscales, sampler='fps')
+            new_xyz, new_points, grouped_xyz, fps_points = max_dilation(xyz, points, layer=self.body.layer, sampler='fps')
             l_xyz, l_points = self.body(new_xyz, new_points, grouped_xyz, fps_points)
         
         residual = self.body.residual
@@ -808,11 +814,11 @@ class Res_GACNet(nn.Module):
     def __init__(self, mode):
         super(Res_GACNet, self).__init__()
         # conv, attention, (pna), residual
-        # layer, mode, npoint, radius, nsample, in_channel, out_channel, mlp, bn, act_fxn, att, pna_agg
-        self.res1 = Res_Block(0, mode, 1024, 0.2, 32, 3+3, 64, [32, 32, 64], True, False, 'Mix', True)
-        self.res2 = Res_Block(1, mode, 256, 0.4, 32, 64+3, 128, [64, 64, 128], True, False, 'Mix', True)
-        self.res3 = Res_Block(2, mode, 64, 0.6, 32, 128+3, 256, [128, 128, 256], True, False, 'Mix', True)
-        self.res4 = Res_Block(3, mode, 16, 0.8, 32, 256+3, 512, [256, 256, 512], True, False, 'Mix', True)
+        # layer, mode, npoint, radius, nscale, in_channel, out_channel, mlp, bn, act_fxn, att, pna_agg
+        self.res1 = Res_Block(0, mode, 1024, 0.3, Config.nscales[0], 3+3, 64, [32, 32, 64], True, False, 'Mix', True)
+        self.res2 = Res_Block(1, mode, 256, 0.5, Config.nscales[1], 64+3, 128, [64, 64, 128], True, False, 'Mix', True)
+        self.res3 = Res_Block(2, mode, 128, 0.8, Config.nscales[2], 128+3, 256, [128, 128, 256], True, False, 'Mix', True)
+        self.res4 = Res_Block(3, mode, 64, 1.6, Config.nscales[3], 256+3, 512, [256, 256, 512], True, False, 'Mix', True)
 
         #pointNet feature propagation: in_channel, mlp
         self.fp4 = PointNetFeaturePropagation(768, [256, 256])
@@ -823,7 +829,7 @@ class Res_GACNet(nn.Module):
         # FC layers
         self.conv1 = nn.Conv1d(128, 128, 1)
         self.bn1 = nn.BatchNorm1d(128, track_running_stats=False)
-        self.drop1 = nn.Dropout(self.sa1.dropout)
+        self.drop1 = nn.Dropout(self.res1.body.dropout)
         self.conv2 = nn.Conv1d(128, Config.num_classes, 1)
 
     def forward(self, xyz, points):
@@ -868,13 +874,13 @@ class GACNet_PNA(nn.Module):
         self.conv2 = nn.Conv1d(128, Config.num_classes, 1)
 
     def forward(self, xyz, points):
-        new_xyz, new_points, grouped_xyz, fps_points = max_dilation(xyz, points, layer=0, nscales=1, sampler='fps')
+        new_xyz, new_points, grouped_xyz, fps_points = max_dilation(xyz, points, layer=0, sampler='fps')
         l1_xyz, l1_points = self.sa1(new_xyz, new_points, grouped_xyz, fps_points)
-        new_xyz, new_points, grouped_xyz, fps_points = max_dilation(l1_xyz, l1_points, layer=1, nscales=1, sampler='fps')
+        new_xyz, new_points, grouped_xyz, fps_points = max_dilation(l1_xyz, l1_points, layer=1, sampler='fps')
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
-        new_xyz, new_points, grouped_xyz, fps_points = max_dilation(l2_xyz, l2_points, layer=2, nscales=1, sampler='fps')
+        new_xyz, new_points, grouped_xyz, fps_points = max_dilation(l2_xyz, l2_points, layer=2, sampler='fps')
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
-        new_xyz, new_points, grouped_xyz, fps_points = max_dilation(l3_xyz, l3_points, layer=3, nscales=1, sampler='fps')
+        new_xyz, new_points, grouped_xyz, fps_points = max_dilation(l3_xyz, l3_points, layer=3, sampler='fps')
         l4_xyz, l4_points = self.sa4(l3_xyz, l3_points)
 
         l3_points = self.fp4(l3_xyz, l4_xyz, l3_points, l4_points)

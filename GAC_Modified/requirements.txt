@@ -15,4 +15,6 @@ tensorboard==2.7.0
 pickleshare==0.7.5
 seaborn==0.11.2
 ninja==1.10.2.2
+open3d==0.16.0
+pytictoc
 # --upgrade https://github.com/unlimblue/KNN_CUDA/releases/download/0.2/KNN_CUDA-0.2-py3-none-any.whl

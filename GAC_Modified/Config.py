@@ -34,7 +34,7 @@ class Hparams(object):
 
 
     # multi-scale nbrhood parameters
-    nscales = 2 # that is len(multi_nsamples) to deploy
+    nscales = [2, 2, 1, 1] # that is len(multi_nsamples) to deploy
     multi_nsamples = [20, 44, 60] 
     # todo: reason, pick the largest nbrhood n get the smaller ones from it
     max_radius = [2.0, 4.0, 6.0]  # one per multi-dilated layer
@@ -42,7 +42,7 @@ class Hparams(object):
     '''CREATE DIR'''
     experiment_dir = Path('experiment/')  # todo: check to make sure
     experiment_dir.mkdir(exist_ok=True)
-    file_dir = Path(str(experiment_dir) +'/'+ str(datetime.datetime.now().strftime('%Y-%m-%d_%H-%M')))
+    file_dir = Path(str(experiment_dir) +'/'+ str(datetime.now().strftime('%Y-%m-%d_%H-%M')))
     file_dir.mkdir(exist_ok=True)
     checkpoints_dir = file_dir.joinpath('checkpoints/')
     checkpoints_dir.mkdir(exist_ok=True)
